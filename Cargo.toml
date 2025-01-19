@@ -1,0 +1,9 @@
+[package]
+name = "asyncrust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam = "0.8.4"
+log = "0.4.25"
+thiserror = "2.0.11"
