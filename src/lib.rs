@@ -246,7 +246,7 @@ impl Threadpool {
     /// let pool = Threadpool::build(config).unwrap();
     /// ```
     pub fn build(config: ThreadPoolConfig) -> Result<Self, ThreadPoolError> {
-        if config.size <= 0 {
+        if config.size == 0 {
             return Err(ThreadPoolError::InvalidSize);
         }
 
@@ -280,7 +280,6 @@ impl Threadpool {
     /// # Arguments
     /// * `r` - The receiver end of the job channel
     /// * `pool_inner` - Shared pool state for metrics and synchronization
-
     fn spawn_worker_thread(
         r: Arc<Receiver<Job>>,
         pool_inner: Arc<ThreadPoolInner>,
