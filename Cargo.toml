@@ -2,6 +2,12 @@
 name = "threadpool"
 version = "0.1.0"
 edition = "2021"
+authors = ["Chetan <chetanbaliyan10@gmail.com>"]
+description = "A thread pool implementation"
+license = "MIT"
+repository = "https://github.com/chetanXpro/threadpool"
+keywords = ["threadpool", "concurrency", "threads", "parallel"]
+categories = ["concurrency"]
 
 [lib]
 name = "threadpool"
