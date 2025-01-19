@@ -1,5 +1,5 @@
 [package]
-name = "asyncrust"
+name = "threadpool"
 version = "0.1.0"
 edition = "2021"
 
@@ -10,5 +10,6 @@ path = "src/lib.rs"
 [dependencies]
 crossbeam = "0.8.4"
 log = "0.4.25"
+num_cpus = "1.16.0"
 thiserror = "2.0.11"
 
