@@ -2,7 +2,10 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use error::ThreadPoolError;
 use log::error;
 use std::{
-    sync::{Arc, Condvar, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Condvar, Mutex,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -10,17 +13,53 @@ mod error;
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
-pub struct ThreadPoolInner {
+pub struct ThreadPoolMetrics {
+    total_jobs_submitted: AtomicUsize,
+    completed_jobs: AtomicUsize,
+    peak_concurrent_jobs: AtomicUsize,
+    failed_jobs: AtomicUsize,
+}
+struct ThreadPoolInner {
     job_count: Mutex<usize>,
     empty_condvar: Condvar,
+    metrics: ThreadPoolMetrics,
 }
 
+impl Default for ThreadPoolMetrics {
+    fn default() -> Self {
+        Self {
+            total_jobs_submitted: AtomicUsize::new(0),
+            peak_concurrent_jobs: AtomicUsize::new(0),
+            completed_jobs: AtomicUsize::new(0),
+            failed_jobs: AtomicUsize::new(0),
+        }
+    }
+}
 impl Default for ThreadPoolInner {
     fn default() -> Self {
         Self {
             empty_condvar: Condvar::new(),
             job_count: Mutex::new(0),
+            metrics: ThreadPoolMetrics::default(),
         }
+    }
+}
+
+impl ThreadPoolMetrics {
+    pub fn total_jobs_submitted(&self) -> usize {
+        self.total_jobs_submitted.load(Ordering::Relaxed)
+    }
+
+    pub fn completed_jobs(&self) -> usize {
+        self.completed_jobs.load(Ordering::Relaxed)
+    }
+
+    pub fn peak_concurrent_jobs(&self) -> usize {
+        self.peak_concurrent_jobs.load(Ordering::Relaxed)
+    }
+
+    pub fn failed_jobs(&self) -> usize {
+        self.failed_jobs.load(Ordering::Relaxed)
     }
 }
 
@@ -29,6 +68,11 @@ impl ThreadPoolInner {
         let mut count = self.job_count.lock().unwrap();
 
         *count += 1;
+
+        let current = *count;
+        self.metrics
+            .peak_concurrent_jobs
+            .fetch_max(current, Ordering::Release);
     }
 
     fn finish_job(&self) {
@@ -129,6 +173,10 @@ impl Threadpool {
                 Err(_) => break,
             };
 
+            pool_inner
+                .metrics
+                .total_jobs_submitted
+                .fetch_add(1, Ordering::Relaxed);
             pool_inner.start_job();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 job();
@@ -136,9 +184,17 @@ impl Threadpool {
 
             match result {
                 Ok(_) => {
+                    pool_inner
+                        .metrics
+                        .completed_jobs
+                        .fetch_add(1, Ordering::Relaxed);
                     pool_inner.finish_job();
                 }
                 Err(_) => {
+                    pool_inner
+                        .metrics
+                        .failed_jobs
+                        .fetch_add(1, Ordering::Relaxed);
                     pool_inner.finish_job();
                 }
             }
@@ -147,6 +203,10 @@ impl Threadpool {
 
     pub fn get_job_count(&self) -> usize {
         *self.pool_inner.job_count.lock().unwrap()
+    }
+
+    pub fn get_metrics(&self) -> &ThreadPoolMetrics {
+        &self.pool_inner.metrics
     }
     pub fn join(&self, timeout: Duration) -> bool {
         self.pool_inner.wait_empty(timeout)
@@ -309,5 +369,29 @@ mod test {
         // Immediate shutdown should still process queued jobs
         assert!(pool.shutdown());
         assert_eq!(counter.load(Ordering::Acquire), 5);
+    }
+
+    #[test]
+    fn pool_metrics_test() {
+        let mut pool = Threadpool::build(2).unwrap();
+        let counter = Arc::new(AtomicU8::new(0));
+        let counter_clone = Arc::clone(&counter);
+
+        // Submit a job that panics
+        pool.execute(|| panic!("intentional panic")).unwrap();
+
+        // Submit another normal job
+        pool.execute(move || {
+            counter_clone.fetch_add(1, Ordering::Release);
+        })
+        .unwrap();
+
+        // Pool should handle the panic and complete the second job
+        assert!(pool.shutdown());
+
+        let metrics = pool.get_metrics();
+        assert_eq!(metrics.completed_jobs(), 1);
+        assert_eq!(metrics.failed_jobs(), 1);
+        assert_eq!(metrics.total_jobs_submitted(), 2);
     }
 }
