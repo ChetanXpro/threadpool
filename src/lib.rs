@@ -254,4 +254,60 @@ mod test {
 
         assert_eq!(pool.join(Duration::from_millis(10)), false);
     }
+
+    #[test]
+    fn shutdown_should_reject_new_jobs() {
+        let mut pool = Threadpool::build(2).unwrap();
+
+        // Submit initial job
+        pool.execute(|| thread::sleep(Duration::from_millis(10)))
+            .unwrap();
+
+        // after shutdown
+        assert!(pool.shutdown());
+
+        // new job should be rejected
+        let result = pool.execute(|| println!("shouldn't run"));
+        assert!(matches!(result, Err(ThreadPoolError::ShuttingDown)));
+    }
+
+    #[test]
+    fn pool_should_handle_panic() {
+        let mut pool = Threadpool::build(2).unwrap();
+        let counter = Arc::new(AtomicU8::new(0));
+        let counter_clone = Arc::clone(&counter);
+
+        // Submit a job that panics
+        pool.execute(|| panic!("intentional panic")).unwrap();
+
+        // Submit another normal job
+        pool.execute(move || {
+            counter_clone.fetch_add(1, Ordering::Release);
+        })
+        .unwrap();
+
+        // Pool should handle the panic and complete the second job
+        assert!(pool.shutdown());
+        assert_eq!(counter.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn pool_should_complete_queued_jobs_during_shutdown() {
+        let mut pool = Threadpool::build(2).unwrap();
+        let counter = Arc::new(AtomicU8::new(0));
+
+        // Queue up several jobs
+        for _ in 0..5 {
+            let counter_clone = Arc::clone(&counter);
+            pool.execute(move || {
+                thread::sleep(Duration::from_millis(10));
+                counter_clone.fetch_add(1, Ordering::Release);
+            })
+            .unwrap();
+        }
+
+        // Immediate shutdown should still process queued jobs
+        assert!(pool.shutdown());
+        assert_eq!(counter.load(Ordering::Acquire), 5);
+    }
 }
